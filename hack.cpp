@@ -47,6 +47,15 @@ void game_change_reimpl(RValue *ret, void *self, void *other, int argc, RValue *
     exit(-1); // probably a better way than murdering the process...
 }
 
+void (*gpu_set_texfilter)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
+void gpu_set_texfilter_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
+{
+    /* We're patching the runner to auto-convert to RGBA so report that. */
+    args[0].kind = 0;
+    args[0].rvalue.val = 0.0;
+    gpu_set_texfilter(ret, self, other, argc, args);
+}
+
 uintptr_t align = 0;
 uintptr_t page = 0;
 uint8_t os_type_funct[128] = {};
@@ -122,6 +131,12 @@ void Function_Add_hack(const char *name, uintptr_t entry, int argc, char reg)
     {
         printf("Function_Add_hack!! %s\n", name);
         Function_Add_entry(name, (uintptr_t)game_change_reimpl, argc, reg);
+    }
+    else if (strcmp(name, "gpu_set_texfilter") == 0)
+    {
+        printf("Function_Add_hack!! %s\n", name);
+        Function_Add_entry(name, (uintptr_t)gpu_set_texfilter_reimpl, argc, reg);
+        gpu_set_texfilter = (decltype(gpu_set_texfilter))entry;
     }
     else
     {
@@ -227,7 +242,7 @@ void DeltaHacks()
     memcpy(Function_Add_prologue, (void *)Function_Add_entry, sizeof(Function_Add_prologue));
     memcpy_code(Function_Add_entry, Function_Add_trampoline, sizeof(Function_Add_trampoline));
     memcpy_code(OsType_entry, os_type_funct, fct_os_type.getSize());
-    memcpy_code((void*)0x00794746, game_unx_funct, 5);
+    memcpy_code((void*)0x00794746, game_unx_funct, fct_game_unx.getSize());
     memcpy_const((void *)0x00849ffa, "./", 3); // use workdir instead of "assets/"
     // memcpy_const((void *)0x0088cd52, "-game data.win", 15); // don't force "-game game.unx" on my cmdline ya doofus
     /* all done! */
