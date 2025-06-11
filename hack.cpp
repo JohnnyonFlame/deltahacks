@@ -28,6 +28,9 @@ struct RValue {
     int kind;
 };
 
+void (*game_end)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
+void (*gpu_set_texfilter)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
+
 void game_change_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
 {
     const char *working_directory = (const char *)args[0].rvalue.str->m_thing;
@@ -44,16 +47,17 @@ void game_change_reimpl(RValue *ret, void *self, void *other, int argc, RValue *
     fprintf(launch, "%s\n", working_directory);
     fprintf(launch, "%s\n", launch_parameters);
     fclose(launch);
-    exit(-1); // probably a better way than murdering the process...
+    game_end(ret, self, other, 0, args);
+    // exit(-1); // probably a better way than murdering the process...
 }
 
-void (*gpu_set_texfilter)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
 void gpu_set_texfilter_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
 {
     args[0].kind = 0;
     args[0].rvalue.val = 0.0;
     gpu_set_texfilter(ret, self, other, argc, args);
 }
+
 
 uintptr_t align = 0;
 uintptr_t page = 0;
@@ -139,6 +143,8 @@ void Function_Add_hack(const char *name, uintptr_t entry, int argc, char reg)
     }
     else
     {
+        if (strcmp(name, "game_end") == 0)
+            game_end = (decltype(game_end))entry;
         Function_Add_entry(name, entry, argc, reg);
     }
 
