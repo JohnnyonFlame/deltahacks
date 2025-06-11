@@ -50,7 +50,6 @@ void game_change_reimpl(RValue *ret, void *self, void *other, int argc, RValue *
 void (*gpu_set_texfilter)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
 void gpu_set_texfilter_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
 {
-    /* We're patching the runner to auto-convert to RGBA so report that. */
     args[0].kind = 0;
     args[0].rvalue.val = 0.0;
     gpu_set_texfilter(ret, self, other, argc, args);
