@@ -9,6 +9,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include "misc.hpp"
+
 struct Ref {
     void *m_thing;
     int m_refCOunt;
@@ -27,6 +29,9 @@ struct RValue {
     int flags;
     int kind;
 };
+
+uintptr_t align = 0;
+uintptr_t page = 0;
 
 void (*game_end)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
 void (*gpu_set_texfilter)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
@@ -58,9 +63,33 @@ void gpu_set_texfilter_reimpl(RValue *ret, void *self, void *other, int argc, RV
     gpu_set_texfilter(ret, self, other, argc, args);
 }
 
+template <typename Func>
+struct Hook {
+    static const unsigned long max_code_size = 128;
 
-uintptr_t align = 0;
-uintptr_t page = 0;
+    size_t length;
+    Func entry;
+    uint8_t prologue[max_code_size];
+    uint8_t hook[max_code_size];
+
+    void apply() {
+        memcpy_code((void *)entry, hook, length);
+    }
+
+    void restore() {
+        memcpy_code((void *)entry, prologue, length);
+    }
+
+    void prepare(Xbyak::CodeGenerator &cgen, uintptr_t entry, bool apply) {
+        cgen.ready();
+        this->entry = (Func)entry;
+        memcpy((void *)prologue, (void *)cgen.getCode(), cgen.getSize());
+
+        if (apply)
+            this->apply();
+    }
+};
+
 uint8_t os_type_funct[128] = {};
 uint8_t game_unx_funct[128] = {};
 int (*GetSaveFileName_entry)(char *dst, int unk, char *src) = (decltype(GetSaveFileName_entry))0x00799b10;
@@ -72,42 +101,30 @@ uint8_t Function_Add_prologue[128] = {};
 void (* OsType_entry) = (decltype(OsType_entry))0x004bac00;
 void (* AssetFolder_entry) = (decltype(AssetFolder_entry))0x00794090;
 
+struct GetSavePrePendHook : Xbyak::CodeGenerator {
+    static inline Hook<char *(*)(void)> hook = {};
+    
+    static char * GetSavePrePend_Hack()
+    {
+        hook.restore();
+        char * ret = hook.entry();
+        hook.apply();
+        printf("GetSavePrePend: %s\n", ret);
+        return ret;
+    }
 
-template <typename T, typename T2>
-static constexpr T bit_cast(T2 v)
-{
-    union {
-        T2 v;
-        T r;
-    } temporary = {.v = v};
+    GetSavePrePendHook(uintptr_t entry) : Xbyak::CodeGenerator(hook.max_code_size, (void *)hook.entry) {
+        /* assemble */
+        push(rbx);
+        mov(rbx, (uintptr_t)&GetSavePrePend_Hack);
+        call(rbx);
+        pop(rbx);
+        ret();
 
-    return temporary.r;
-}
-
-template <typename T>
-static uintptr_t ALIGN(const T ptr)
-{
-    return ((uintptr_t)ptr & align);
-}
-
-template <typename T1, typename T2>
-void memcpy_code(T1 dst, T2 src, size_t len)
-{    
-    void *align_dst = (void*)ALIGN(dst);
-    mprotect(align_dst, page, PROT_READ | PROT_WRITE);
-    memcpy((void *)dst, (void *)src, len);
-    mprotect(align_dst, page, PROT_EXEC | PROT_READ);
-    __builtin___clear_cache((void *)dst, (void *)((uintptr_t)dst + len));
-}
-
-template <typename T1, typename T2>
-void memcpy_const(T1 dst, T2 src, size_t len)
-{    
-    void *align_dst = (void*)ALIGN(dst);
-    mprotect(align_dst, page, PROT_READ | PROT_WRITE);
-    memcpy((void *)dst, (void *)src, len);
-    mprotect(align_dst, page, PROT_READ);
-}
+        /* hook */
+        hook.prepare(*this, entry, true);
+    }
+};
 
 int GetSaveFileName_Hack(char *dst, int unk, char *src)
 {
@@ -118,6 +135,7 @@ int GetSaveFileName_Hack(char *dst, int unk, char *src)
     memcpy_code(GetSaveFileName_entry, GetSaveFileName_prologue, sizeof(GetSaveFileName_prologue));
     int ret = GetSaveFileName_entry(dst, unk, src);
     struct stat stt = {};
+    printf("%s %s\n", src, dst);
     if (stat(src, &stt) == 0)
         strcpy(dst, src);
         
@@ -242,6 +260,8 @@ void DeltaHacks()
     GAME_UNX_OVERLOAD fct_game_unx(game_unx_funct);
     fct_game_unx.ready();
 
+    static GetSavePrePendHook prepend(0x7940a0);
+    
     memcpy(GetSaveFileName_prologue, (void *)GetSaveFileName_entry, sizeof(GetSaveFileName_prologue));
     memcpy_code(GetSaveFileName_entry, (void *)GetSaveFileName_trampoline, fct_get_save_filename.getSize());
     memcpy(Function_Add_prologue, (void *)Function_Add_entry, sizeof(Function_Add_prologue));
