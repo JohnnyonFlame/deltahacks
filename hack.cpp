@@ -83,23 +83,54 @@ struct Hook {
     void prepare(Xbyak::CodeGenerator &cgen, uintptr_t entry, bool apply) {
         cgen.ready();
         this->entry = (Func)entry;
-        memcpy((void *)prologue, (void *)cgen.getCode(), cgen.getSize());
+        this->length = cgen.getSize();
+        memcpy((void *)prologue, (void *)entry, cgen.getSize());
 
         if (apply)
             this->apply();
     }
 };
 
-uint8_t os_type_funct[128] = {};
-uint8_t game_unx_funct[128] = {};
-int (*GetSaveFileName_entry)(char *dst, int unk, char *src) = (decltype(GetSaveFileName_entry))0x00799b10;
-uint8_t GetSaveFileName_trampoline[128] = {};
-uint8_t GetSaveFileName_prologue[128] = {};
-void (* Function_Add_entry)(const char *name, uintptr_t entry, int argc, char reg) = (decltype(Function_Add_entry))0x4323a0;
-uint8_t Function_Add_trampoline[128] = {};
-uint8_t Function_Add_prologue[128] = {};
-void (* OsType_entry) = (decltype(OsType_entry))0x004bac00;
-void (* AssetFolder_entry) = (decltype(AssetFolder_entry))0x00794090;
+struct FunctionAddHook : Xbyak::CodeGenerator {
+    static inline Hook<void (*)(const char *, uintptr_t entry, int, char)> hook = {};
+
+    static void Function_Add_hack(const char *name, uintptr_t funct, int argc, char reg)
+    {
+        hook.restore();
+        
+        if (strcmp(name, "game_change") == 0)
+        {
+            printf("Function_Add_hack!! %s\n", name);
+            hook.entry(name, (uintptr_t)game_change_reimpl, argc, reg);
+        }
+        else if (strcmp(name, "gpu_set_texfilter") == 0)
+        {
+            printf("Function_Add_hack!! %s\n", name);
+            hook.entry(name, (uintptr_t)gpu_set_texfilter_reimpl, argc, reg);
+            gpu_set_texfilter = (decltype(gpu_set_texfilter))funct;
+        }
+        else
+        {
+            if (strcmp(name, "game_end") == 0)
+                game_end = (decltype(game_end))funct;
+            hook.entry(name, funct, argc, reg);
+        }
+
+        hook.apply();
+    }
+
+    FunctionAddHook(uintptr_t entry) : Xbyak::CodeGenerator(hook.max_code_size, (void *)hook.hook) {
+        /* assemble */
+        push(rbx);
+        mov(rbx, (uintptr_t)&Function_Add_hack);
+        call(rbx);
+        pop(rbx);
+        ret();
+
+        /* hook */
+        hook.prepare(*this, entry, true);
+    }
+};
 
 struct GetSavePrePendHook : Xbyak::CodeGenerator {
     static inline Hook<char *(*)(void)> hook = {};
@@ -113,7 +144,7 @@ struct GetSavePrePendHook : Xbyak::CodeGenerator {
         return ret;
     }
 
-    GetSavePrePendHook(uintptr_t entry) : Xbyak::CodeGenerator(hook.max_code_size, (void *)hook.entry) {
+    GetSavePrePendHook(uintptr_t entry) : Xbyak::CodeGenerator(hook.max_code_size, (void *)hook.hook) {
         /* assemble */
         push(rbx);
         mov(rbx, (uintptr_t)&GetSavePrePend_Hack);
@@ -126,48 +157,69 @@ struct GetSavePrePendHook : Xbyak::CodeGenerator {
     }
 };
 
-int GetSaveFileName_Hack(char *dst, int unk, char *src)
-{
-    // Gamemaker is kinda silly, and forces files to be lowercase on Linux,
-    // we're going to hack this function to check if the original name is valid
-    // and restore it, this fixes some music not playing.
+struct OsTypeHook : Xbyak::CodeGenerator {
+    static inline Hook<void *> hook = {};
 
-    memcpy_code(GetSaveFileName_entry, GetSaveFileName_prologue, sizeof(GetSaveFileName_prologue));
-    int ret = GetSaveFileName_entry(dst, unk, src);
-    struct stat stt = {};
-    printf("%s %s\n", src, dst);
-    if (stat(src, &stt) == 0)
-        strcpy(dst, src);
-        
-    memcpy_code(GetSaveFileName_entry, GetSaveFileName_trampoline, sizeof(GetSaveFileName_trampoline));
-    return ret;
-}
+    OsTypeHook(uintptr_t entry) : Xbyak::CodeGenerator(hook.max_code_size, (void *)hook.hook)
+    {
+        /* assemble */
+        mov(dword [rdx + 0xc], 0x0);
+        mov(rax, bit_cast<uint64_t>((double)0.0)); //os_windows
+        mov(qword [rdx], rax);
+        mov(al, 0x1);
+        ret();
 
-void Function_Add_hack(const char *name, uintptr_t entry, int argc, char reg)
-{
-    // Pretty obvious - a function_add hook in order to rework functionality.
-    memcpy_code(Function_Add_entry, Function_Add_prologue, sizeof(Function_Add_prologue));
-    
-    if (strcmp(name, "game_change") == 0)
-    {
-        printf("Function_Add_hack!! %s\n", name);
-        Function_Add_entry(name, (uintptr_t)game_change_reimpl, argc, reg);
+        /* hook */
+        hook.prepare(*this, entry, true);
     }
-    else if (strcmp(name, "gpu_set_texfilter") == 0)
+};
+
+struct GetSaveFilenameHook : Xbyak::CodeGenerator {
+    static inline Hook<int (*)(char *, int, char *)> hook = {};
+
+    static int GetSaveFileName_Hack(char *dst, int unk, char *src)
     {
-        printf("Function_Add_hack!! %s\n", name);
-        Function_Add_entry(name, (uintptr_t)gpu_set_texfilter_reimpl, argc, reg);
-        gpu_set_texfilter = (decltype(gpu_set_texfilter))entry;
-    }
-    else
-    {
-        if (strcmp(name, "game_end") == 0)
-            game_end = (decltype(game_end))entry;
-        Function_Add_entry(name, entry, argc, reg);
+        // Gamemaker is kinda silly, and forces files to be lowercase on Linux,
+        // we're going to hack this function to check if the original name is valid
+        // and restore it, this fixes some music not playing.
+
+        hook.restore();
+        int ret = hook.entry(dst, unk, src);
+        struct stat stt = {};
+        printf("%s %s\n", src, dst);
+        if (stat(src, &stt) == 0)
+            strcpy(dst, src);
+            
+        hook.apply();
+        return ret;
     }
 
-    memcpy_code(Function_Add_entry, Function_Add_trampoline, sizeof(Function_Add_trampoline));
-}
+    GetSaveFilenameHook(uintptr_t entry) : Xbyak::CodeGenerator(hook.max_code_size, (void *)hook.hook)
+    {
+        /* assemble */
+        push(rbx);
+        mov(rbx, (uintptr_t)GetSaveFileName_Hack);
+        call(rbx);
+        pop(rbx);
+        ret();
+
+        /* hook */
+        hook.prepare(*this, entry, true);
+    }
+};
+
+struct GameUnxHook : Xbyak::CodeGenerator {
+    static inline Hook<void *> hook = {};
+
+    GameUnxHook(uintptr_t entry) : Xbyak::CodeGenerator(hook.max_code_size, (void *)hook.hook)
+    {
+        /* assemble */
+        nop(5);
+
+        /* hook */
+        hook.prepare(*this, entry, true);
+    }
+};
 
 void DeltaHacks() __attribute__((constructor));
 void DeltaHacks()
@@ -183,92 +235,11 @@ void DeltaHacks()
     page = getpagesize();
     align = ~(page - 1);
 
-    /*
-      Let's hack Function_Add so we can rework things!
-    */
-    struct FCT_ADD_PAYLOAD : Xbyak::CodeGenerator {
-        FCT_ADD_PAYLOAD(uint8_t *ptr) : Xbyak::CodeGenerator(sizeof(Function_Add_trampoline), (void*) ptr)
-        {
-            push(rbx);
-            mov(rbx, (uintptr_t)Function_Add_hack);
-            call(rbx);
-            pop(rbx);
-            ret();
-            nop(); /* buncha nops to make sure we dont get odd instructions */
-            nop();
-            nop();
-            nop();
-            nop();
-            nop();
-        }
-    };
-
-    FCT_ADD_PAYLOAD fct_add_payload(Function_Add_trampoline);
-    fct_add_payload.ready();
-
-    /*
-      Let's improve the odd 'tolower' that gms does on file open...
-    */
-    struct FCT_GET_SAVE_FILENAME : Xbyak::CodeGenerator {
-        FCT_GET_SAVE_FILENAME(uint8_t *ptr) : Xbyak::CodeGenerator(sizeof(GetSaveFileName_trampoline), (void*) ptr)
-        {
-            push(rbx);
-            mov(rbx, (uintptr_t)GetSaveFileName_Hack);
-            call(rbx);
-            pop(rbx);
-            ret();
-            nop(); /* buncha nops to make sure we dont get odd instructions */
-            nop();
-            nop();
-            nop();
-            nop();
-            nop();
-        
-        }
-    };
-
-    FCT_GET_SAVE_FILENAME fct_get_save_filename(GetSaveFileName_trampoline);
-    fct_get_save_filename.ready();
-
-    /*
-      This is 100% a windows game, trust me, we're not on linux :)
-    */
-    struct FCT_OS_TYPE : Xbyak::CodeGenerator {
-        FCT_OS_TYPE(uint8_t *ptr) : Xbyak::CodeGenerator(sizeof(os_type_funct), (void*) ptr)
-        {
-            mov(dword [rdx + 0xc], 0x0);
-            mov(rax, bit_cast<uint64_t>((double)0.0)); //os_windows
-            mov(qword [rdx], rax);
-            mov(al, 0x1);
-            ret();
-        }
-    };
-
-    FCT_OS_TYPE fct_os_type(os_type_funct);
-    fct_os_type.ready();
-
-    /*
-      Don't let the runner override -game data.win with -game game.unx
-    */
-    struct GAME_UNX_OVERLOAD : Xbyak::CodeGenerator {
-        GAME_UNX_OVERLOAD(uint8_t *ptr) : Xbyak::CodeGenerator(5, (void*) ptr)
-        {
-            nop(5);
-        }
-    };
-
-    GAME_UNX_OVERLOAD fct_game_unx(game_unx_funct);
-    fct_game_unx.ready();
-
-    static GetSavePrePendHook prepend(0x7940a0);
-    
-    memcpy(GetSaveFileName_prologue, (void *)GetSaveFileName_entry, sizeof(GetSaveFileName_prologue));
-    memcpy_code(GetSaveFileName_entry, (void *)GetSaveFileName_trampoline, fct_get_save_filename.getSize());
-    memcpy(Function_Add_prologue, (void *)Function_Add_entry, sizeof(Function_Add_prologue));
-    memcpy_code(Function_Add_entry, Function_Add_trampoline, sizeof(Function_Add_trampoline));
-    memcpy_code(OsType_entry, os_type_funct, fct_os_type.getSize());
-    memcpy_code((void*)0x00794746, game_unx_funct, fct_game_unx.getSize());
+    FunctionAddHook(0x004323a0); // Let's detour a few GameMaker functions.
+    GetSaveFilenameHook(0x00799b10); // GameMaker on Linux forces lowercase filenames, check if the non-lowercase exists first
+    GetSavePrePendHook(0x007940a0); // Let's get some debugging on SavePrePend.
+    OsTypeHook(0x004bac00); // Pretend we're running on Windows instead.
+    GameUnxHook(0x00794746); // Don't let the runner override -game data.win with -game game.unx
     memcpy_const((void *)0x00849ffa, "./", 3); // use workdir instead of "assets/"
-    // memcpy_const((void *)0x0088cd52, "-game data.win", 15); // don't force "-game game.unx" on my cmdline ya doofus
     /* all done! */
 }
