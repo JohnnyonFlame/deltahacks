@@ -9,57 +9,12 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include "gamemaker.hpp"
 #include "misc.hpp"
-
-struct Ref {
-    void *m_thing;
-    int m_refCOunt;
-    int m_size;
-};
-
-struct RValue {
-    union {
-        int v32;
-        long long v64;
-        double val;
-
-        Ref *str;
-    } rvalue;
-
-    int flags;
-    int kind;
-};
+#include "hook.hpp"
 
 uintptr_t align = 0;
 uintptr_t page = 0;
-
-template <typename Func>
-struct Hook {
-    static const unsigned long max_code_size = 128;
-
-    size_t length;
-    Func entry;
-    uint8_t prologue[max_code_size];
-    uint8_t hook[max_code_size];
-
-    void apply() {
-        memcpy_code((void *)entry, hook, length);
-    }
-
-    void restore() {
-        memcpy_code((void *)entry, prologue, length);
-    }
-
-    void prepare(Xbyak::CodeGenerator &cgen, uintptr_t entry, bool apply) {
-        cgen.ready();
-        this->entry = (Func)entry;
-        this->length = cgen.getSize();
-        memcpy((void *)prologue, (void *)entry, cgen.getSize());
-
-        if (apply)
-            this->apply();
-    }
-};
 
 struct FunctionAddHook : Xbyak::CodeGenerator {
     static inline Hook<void (*)(const char *, uintptr_t entry, int, char)> hook = {};

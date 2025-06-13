@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <cstddef>
 
-
 extern uintptr_t align;
 extern uintptr_t page;
 
