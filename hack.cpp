@@ -33,36 +33,6 @@ struct RValue {
 uintptr_t align = 0;
 uintptr_t page = 0;
 
-void (*game_end)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
-void (*gpu_set_texfilter)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
-
-void game_change_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
-{
-    const char *working_directory = (const char *)args[0].rvalue.str->m_thing;
-    const char *launch_parameters = (const char *)args[1].rvalue.str->m_thing;
-
-    printf("GAMECHANGE: %s %s\n", working_directory, launch_parameters);
-    FILE *launch = fopen("/tmp/deltarune-launch-hack.lock", "w");
-    if (!launch)
-    {
-        printf("CHANGEGAME FAILED!\n");
-        abort();   
-    }
-
-    fprintf(launch, "%s\n", working_directory);
-    fprintf(launch, "%s\n", launch_parameters);
-    fclose(launch);
-    game_end(ret, self, other, 0, args);
-    // exit(-1); // probably a better way than murdering the process...
-}
-
-void gpu_set_texfilter_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
-{
-    args[0].kind = 0;
-    args[0].rvalue.val = 0.0;
-    gpu_set_texfilter(ret, self, other, argc, args);
-}
-
 template <typename Func>
 struct Hook {
     static const unsigned long max_code_size = 128;
@@ -93,6 +63,36 @@ struct Hook {
 
 struct FunctionAddHook : Xbyak::CodeGenerator {
     static inline Hook<void (*)(const char *, uintptr_t entry, int, char)> hook = {};
+
+    static inline void (*game_end)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
+    static inline void (*gpu_set_texfilter)(RValue *ret, void *self, void *other, int argc, RValue *args) = NULL;
+
+    static void game_change_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
+    {
+        const char *working_directory = (const char *)args[0].rvalue.str->m_thing;
+        const char *launch_parameters = (const char *)args[1].rvalue.str->m_thing;
+
+        printf("GAMECHANGE: %s %s\n", working_directory, launch_parameters);
+        FILE *launch = fopen("/tmp/deltarune-launch-hack.lock", "w");
+        if (!launch)
+        {
+            printf("CHANGEGAME FAILED!\n");
+            abort();   
+        }
+
+        fprintf(launch, "%s\n", working_directory);
+        fprintf(launch, "%s\n", launch_parameters);
+        fclose(launch);
+        game_end(ret, self, other, 0, args);
+        // exit(-1); // probably a better way than murdering the process...
+    }
+
+    static void gpu_set_texfilter_reimpl(RValue *ret, void *self, void *other, int argc, RValue *args)
+    {
+        args[0].kind = 0;
+        args[0].rvalue.val = 0.0;
+        gpu_set_texfilter(ret, self, other, argc, args);
+    }
 
     static void Function_Add_hack(const char *name, uintptr_t funct, int argc, char reg)
     {
