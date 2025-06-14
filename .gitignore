@@ -1,3 +1,4 @@
 deltahack.so
 .vscode/**
 ffmpeg4-sniper/**
+**/*.d
