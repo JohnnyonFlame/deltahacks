@@ -107,8 +107,8 @@ struct GetSavePrePendHook : Xbyak::CodeGenerator {
         pop(rbx);
         ret();
 
-        /* hook */
-        hook.prepare(*this, entry, true);
+        /* hook (disabled) */
+        hook.prepare(*this, entry, false);
     }
 };
 
@@ -134,16 +134,25 @@ struct GetSaveFilenameHook : Xbyak::CodeGenerator {
 
     static int GetSaveFileName_Hack(char *dst, int unk, char *src)
     {
-        // Gamemaker is kinda silly, and forces files to be lowercase on Linux,
+        //   Gamemaker is kinda silly, and forces files to be lowercase on Linux,
         // we're going to hack this function to check if the original name is valid
         // and restore it, this fixes some music not playing.
+        //   If neither the original nor the lowercase version exists, we're going
+        // to return a path into ~/.config/<GAME> in order to avoid saving into pwd.
 
         hook.restore();
         int ret = hook.entry(dst, unk, src);
         struct stat stt = {};
-        printf("%s %s\n", src, dst);
-        if (stat(src, &stt) == 0)
+        
+        if (stat(src, &stt) == 0) {
+            // Does the original filename exist? Let's first look for that
             strcpy(dst, src);
+        } else if (stat(dst, &stt) != 0) {
+            // Does the lowercase filename exist? If not, let's return a path
+            // into the savefolder, so that save files are redirected into the
+            // correct folder.
+            sprintf(dst, "%s%s", GetSavePrePendHook::hook.entry(), src);
+        }
             
         hook.apply();
         return ret;
@@ -181,7 +190,6 @@ void DeltaHacks()
 {
     char linkname[PATH_MAX] = {};
     readlink("/proc/self/exe", linkname, PATH_MAX);
-    printf("%s\n", linkname);
 
     if (strstr(linkname, "runner") == NULL)
         return;
