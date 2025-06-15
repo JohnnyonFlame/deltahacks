@@ -7,7 +7,11 @@
 #include <xbyak.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <dlfcn.h>
+#include <stdarg.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <linux/input.h>
 
 #include "gamemaker.hpp"
 #include "misc.hpp"
@@ -184,6 +188,66 @@ struct GameUnxHook : Xbyak::CodeGenerator {
         hook.prepare(*this, entry, true);
     }
 };
+
+int open(const char *pathname, int flags, ...)
+{
+    #define MAX_DEV 128
+    static bool is_blacklisted[MAX_DEV] = {};
+
+    va_list args;
+    va_start(args, flags);
+
+    //fprintf(stderr, "open(%s, %d, ...);\n", pathname, flags);
+    static int (*or_open)(const char *, int, ...) = NULL;
+    if (!or_open && !(or_open = (decltype(or_open))dlsym(RTLD_NEXT, "open"))) {
+        fprintf(stderr, "Catastrophic failure: dlsym(..., ""open"") == NULL.\n");
+        exit(1);
+    }
+
+    int fd = -1;
+    if (strncmp(pathname, "/dev/input/event", 16) == 0){
+        int devno = strtol(&((const char*)pathname)[16], NULL, 10);
+        if (devno < 0 || devno >= MAX_DEV || is_blacklisted[devno])
+            goto open_end;
+
+        if (flags & O_CREAT)
+            fd = or_open(pathname, flags, va_arg(args, mode_t));
+        else
+            fd = or_open(pathname, flags);
+
+        if (fd < 0) {
+            goto open_end;
+        }
+
+        struct input_id id;
+        if (ioctl(fd, EVIOCGID, &id) < 0) {
+            goto open_fake_fail;
+        }
+
+        // We're skipping the following Steam Deck device:
+        // Input device ID: bus 0x11 vendor 0x1 product 0x1 version 0xab83
+        // Input device name: "AT Translated Set 2 keyboard"
+        if (id.bustype == 0x11 && id.version == 0xab83) {
+            is_blacklisted[devno] = true;
+            goto open_fake_fail;
+        }
+
+        /* success: fall-through */
+    } else { 
+        if (flags & O_CREAT)
+            fd = or_open(pathname, flags, va_arg(args, mode_t));
+        else
+            fd = or_open(pathname, flags);
+    }
+
+open_end:
+    va_end(args);
+    return fd;
+open_fake_fail:
+    va_end(args);
+    close(fd);
+    return -1;
+}
 
 void DeltaHacks() __attribute__((constructor));
 void DeltaHacks()
